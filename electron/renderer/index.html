@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Task Manager</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI Task Manager</h1>
+        </div>
+        
+        <div class="status-container">
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span id="statusText">Ready</span>
+            </div>
+        </div>
+
+        <div class="info-section">
+            <p class="info-text">Press <kbd>Ctrl + M</kbd> to capture screen and create task</p>
+        </div>
+
+        <div class="message-container" id="messageContainer">
+            <!-- Messages will appear here -->
+        </div>
+
+        <div class="settings-section">
+            <button id="settingsBtn" class="btn-secondary">Settings</button>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
+
