@@ -79,6 +79,50 @@ body {
     position: relative;
 }
 
+/* Responsive adjustments - make the chat fluid on smaller viewports */
+@media (max-width: 600px) {
+    .chat-container {
+        position: fixed;
+        width: calc(100vw - 24px);
+        height: calc(100vh - 24px);
+        top: 12px;
+        left: 12px;
+        transform: none;
+        border-radius: 12px;
+        min-width: initial;
+        min-height: initial;
+        overflow: auto;
+    }
+
+    .chat-header {
+        padding: 12px;
+    }
+
+    .control-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .title-icon {
+        font-size: 18px;
+    }
+
+    .content-area {
+        height: auto;
+        flex: 1 1 auto;
+    }
+
+    .chat-messages {
+        padding: 12px;
+        overflow-y: auto;
+        max-height: calc(100vh - 220px);
+    }
+
+    .chat-input-container {
+        padding: 8px;
+    }
+}
+
 /* Add a subtle noise texture for realism */
 .chat-container::before {
     content: '';
@@ -1453,5 +1497,32 @@ body {
         padding: 6px 10px;
         border-radius: 6px;
         white-space: nowrap;
+    }
+}
+
+/* Increase touch target and visible focus styles for accessibility */
+.control-btn:focus,
+.send-btn:focus,
+#messageInput:focus {
+    outline: 3px solid rgba(96, 165, 250, 0.6);
+    outline-offset: 2px;
+}
+
+.send-btn {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 8px;
+}
+
+/* Ensure buttons and interactive elements are easy to tap */
+button {
+    touch-action: manipulation;
+}
+
+/* Respect user preference for reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+        transition: none !important;
     }
 }

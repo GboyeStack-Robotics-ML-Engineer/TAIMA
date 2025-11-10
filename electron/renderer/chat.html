@@ -8,9 +8,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="chat-container" id="chatContainer">
+    <div class="chat-container" id="chatContainer" role="application" aria-label="TAIMA chat application">
         <!-- Header Section with Drag Handle -->
-        <div class="chat-header">
+    <div class="chat-header">
             <div class="drag-handle"></div>
             <div class="header-title">
                 <span class="title-icon">🌌</span>
@@ -25,7 +25,7 @@
         </div>
 
         <!-- Dynamic Content Area -->
-        <div class="content-area" id="contentArea">
+    <div class="content-area" id="contentArea" role="region" aria-label="Conversation area">
             <!-- Text Mode Content -->
             <div class="text-mode-content" id="textModeContent">
                 <!-- Animated Waveform Visualizer -->
@@ -45,7 +45,7 @@
                 </div>
                 
                 <!-- Messages Area -->
-                <div class="chat-messages" id="chatMessages">
+                <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions">
                     <!-- Messages will be dynamically added here -->
                 </div>
             </div>
@@ -94,6 +94,8 @@
                     id="messageInput" 
                     placeholder="Write your prompt here.."
                     rows="1"
+                    aria-label="Message input"
+                    aria-multiline="true"
                 ></textarea>
                 <button id="sendBtn" class="send-btn" title="Send Message">
                     <span class="send-icon">↑</span>
