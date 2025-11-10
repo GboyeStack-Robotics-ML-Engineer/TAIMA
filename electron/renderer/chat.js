@@ -7,7 +7,9 @@ const sendBtn = document.getElementById('sendBtn');
 const screenSelectBtn = document.getElementById('screenSelectBtn');
 const closeBtn = document.getElementById('closeBtn');
 const chatContainer = document.getElementById('chatContainer');
+const minimizeBtn = document.getElementById('minimizeBtn');
 const maximizeBtn = document.getElementById('maximizeBtn');
+const maximizeGlyph = maximizeBtn ? maximizeBtn.querySelector('.traffic-glyph') : null;
 const textModeContent = document.getElementById('textModeContent');
 const audioModeContent = document.getElementById('audioModeContent');
 const textInputContainer = document.getElementById('textInputContainer');
@@ -27,11 +29,12 @@ const backToTextBtn = document.getElementById('backToTextBtn');
 // State
 let isProcessing = false;
 let isAudioMode = false;
-let isEnlarged = false;
+let isWindowMaximized = false;
 let isListening = false;
 let isSpeaking = false;
 let silenceTimeout = null;
 let windowPosition = { x: 0, y: 0 };
+let isMinimizing = false;
 
 // Audio Context and Analyser
 let audioContext = null;
@@ -44,6 +47,23 @@ let dataArray = null;
 let bufferLength = null;
 let voiceActivityDetector = null;
 let sensitivity = 0.5;
+let aiProcessingTimeout = null;
+let aiSpeakingTimeout = null;
+let conversationHistory = [];
+let apiBaseUrl = null;
+
+function updateSendButtonState() {
+    const hasText = messageInput.value.trim().length > 0;
+    if (hasText) {
+        sendBtn.classList.add('mic-mode');
+        sendBtn.querySelector('.send-icon').textContent = '🎤';
+        sendBtn.title = 'Switch to Voice Mode';
+    } else {
+        sendBtn.classList.remove('mic-mode');
+        sendBtn.querySelector('.send-icon').textContent = '↑';
+        sendBtn.title = 'Send Message';
+    }
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -52,8 +72,19 @@ document.addEventListener('DOMContentLoaded', () => {
     setupScreenSelection();
     setupInputBehavior();
     setupCloseButton();
+    setupMinimizeButton();
+    setupWindowResizing();
+    initializeWindowStateSync();
+    initializeApiConfig();
 
     // Add back to text button event listener
+    if (backToTextBtn) {
+        backToTextBtn.addEventListener('click', () => {
+            if (isAudioMode) {
+                toggleAudioMode();
+            }
+        });
+    }
     
     
     // Add welcome message
@@ -63,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Focus input
     messageInput.focus();
+    updateSendButtonState();
 });
 
 // Close Button Functionality
@@ -78,16 +110,7 @@ function setupInputBehavior() {
         messageInput.style.height = 'auto';
         messageInput.style.height = Math.min(messageInput.scrollHeight, 80) + 'px';
         
-        // Toggle between send and mic button
-        if (messageInput.value.trim() === '') {
-            sendBtn.classList.remove('mic-mode');
-            sendBtn.querySelector('.send-icon').textContent = '↑';
-            sendBtn.title = 'Send Message';
-        } else {
-            sendBtn.classList.add('mic-mode');
-            sendBtn.querySelector('.send-icon').textContent = '🎤';
-            sendBtn.title = 'Switch to Voice Mode';
-        }
+        updateSendButtonState();
     });
     
     messageInput.addEventListener('keydown', (e) => {
@@ -98,8 +121,8 @@ function setupInputBehavior() {
     });
 
     sendBtn.addEventListener('click', () => {
-        if (sendBtn.classList.contains('mic-mode')) {
-            // Switch to audio mode
+        const hasText = messageInput.value.trim().length > 0;
+        if (hasText) {
             toggleAudioMode();
         } else {
             sendMessage();
@@ -116,29 +139,70 @@ function setupInputBehavior() {
     });
 }
 
-// Window Enlarge/Restore Functionality
+// Window Controls
 function setupWindowResizing() {
+    if (!maximizeBtn) return;
     maximizeBtn.addEventListener('click', toggleWindowSize);
 }
 
-function toggleWindowSize() {
-    isEnlarged = !isEnlarged;
-    
-    if (isEnlarged) {
-        chatContainer.classList.add('enlarged');
-        maximizeBtn.innerHTML = '⧉';
-        maximizeBtn.title = 'Restore';
-    } else {
-        chatContainer.classList.remove('enlarged');
-        maximizeBtn.innerHTML = '□';
-        maximizeBtn.title = 'Maximize';
+async function toggleWindowSize() {
+    if (!ipcRenderer) return;
+    try {
+        const maximized = await ipcRenderer.invoke('toggle-maximize');
+        updateMaximizeVisualState(Boolean(maximized));
+    } catch (error) {
+        console.error('Error toggling maximize state:', error);
     }
-    
-    centerWindow();
-    
-    if (isAudioMode) {
-        setTimeout(initializeAudioVisualization, 100);
+}
+
+function setupMinimizeButton() {
+    if (!minimizeBtn) return;
+    minimizeBtn.addEventListener('click', () => {
+        ipcRenderer.send('minimize-window');
+    });
+}
+
+function initializeWindowStateSync() {
+    if (!ipcRenderer) return;
+
+    ipcRenderer.invoke('get-window-state')
+        .then((state) => updateMaximizeVisualState(Boolean(state)))
+        .catch((error) => console.error('Error fetching window state:', error));
+
+    ipcRenderer.on('window-state-changed', (_, state) => {
+        updateMaximizeVisualState(Boolean(state && state.maximized));
+    });
+}
+
+async function initializeApiConfig() {
+    if (apiBaseUrl) {
+        return apiBaseUrl;
     }
+
+    try {
+        if (ipcRenderer) {
+            const resolvedUrl = await ipcRenderer.invoke('get-api-url');
+            if (resolvedUrl && typeof resolvedUrl === 'string') {
+                apiBaseUrl = resolvedUrl.replace(/\/$/, '');
+                return apiBaseUrl;
+            }
+        }
+    } catch (error) {
+        console.error('Error resolving API URL:', error);
+    }
+
+    apiBaseUrl = 'http://localhost:3001';
+    return apiBaseUrl;
+}
+
+function updateMaximizeVisualState(maximized) {
+    isWindowMaximized = maximized;
+    if (!maximizeBtn) return;
+    maximizeBtn.classList.toggle('is-maximized', maximized);
+    if (maximizeGlyph) {
+        maximizeGlyph.textContent = maximized ? '↘' : '+';
+    }
+    maximizeBtn.title = maximized ? 'Restore' : 'Maximize';
 }
 
 // Enhanced Audio Mode with Automatic Voice Detection
@@ -146,26 +210,20 @@ function toggleAudioMode() {
 
     isAudioMode = !isAudioMode;
 
-    // const backToTextBtn = document.getElementById('backToTextBtn');
-    backToTextBtn.addEventListener('click', setupInputBehavior);
-    
-    
     if (isAudioMode) {
         // Switch to audio mode
         textModeContent.classList.add('hidden');
         audioModeContent.classList.remove('hidden');
         textInputContainer.classList.add('hidden');
+        messageInput.value = '';
+        messageInput.style.height = 'auto';
+        messageInput.style.height = Math.min(messageInput.scrollHeight, 80) + 'px';
+        clearAudioSimulationTimeouts();
+        updateSendButtonState();
         
         initializeAudioVisualization();
         initializeAudioContext();
         startAutomaticVoiceDetection();
-        
-        addMessage('assistant', '🎤 Voice mode activated! I\'m listening... Speak naturally.');
-
-        // backToTextBtn.addEventListener('click', toggleAudioMode());
-
-        
-    
         
     } else {
         // Switch to text mode
@@ -177,14 +235,12 @@ function toggleAudioMode() {
         cleanupAudio();
         
         // Reset send button
-        sendBtn.classList.remove('mic-mode');
-        sendBtn.querySelector('.send-icon').textContent = '↑';
-        sendBtn.title = 'Send Message';
+        updateSendButtonState();
 
         // Focus back on text input
         messageInput.focus();
-        addMessage('assistant', '📝 Switched back to text mode. You can type your message.');
-
+        messageInput.style.height = 'auto';
+        messageInput.style.height = Math.min(messageInput.scrollHeight, 80) + 'px';
         
     }
 }
@@ -306,6 +362,10 @@ function onSilenceDetected() {
 }
 
 function processDetectedSpeech() {
+    if (!isAudioMode) {
+        audioChunks = [];
+        return;
+    }
     const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
     
     // Show processing state
@@ -314,7 +374,8 @@ function processDetectedSpeech() {
     updateAudioUI();
     
     // Simulate AI processing
-    setTimeout(() => {
+    clearTimeout(aiProcessingTimeout);
+    aiProcessingTimeout = setTimeout(() => {
         simulateAIResponse();
     }, 2000);
     
@@ -326,16 +387,32 @@ function processDetectedSpeech() {
 }
 
 function simulateAIResponse() {
+    if (!isAudioMode) {
+        clearAudioSimulationTimeouts();
+        return;
+    }
     isProcessing = false;
     isSpeaking = true;
     updateAudioUI();
     
     // Simulate AI thinking and responding
-    setTimeout(() => {
+    clearTimeout(aiProcessingTimeout);
+    aiProcessingTimeout = setTimeout(() => {
+        aiProcessingTimeout = null;
+        if (!isAudioMode) {
+            clearAudioSimulationTimeouts();
+            return;
+        }
         addMessage('assistant', 'I heard your voice! This is a simulated response. In a real implementation, this would be actual AI-generated speech.');
         
         // Simulate TTS speaking time
-        setTimeout(() => {
+        clearTimeout(aiSpeakingTimeout);
+        aiSpeakingTimeout = setTimeout(() => {
+            aiSpeakingTimeout = null;
+            if (!isAudioMode) {
+                clearAudioSimulationTimeouts();
+                return;
+            }
             isSpeaking = false;
             isListening = true;
             updateAudioUI();
@@ -364,6 +441,7 @@ function stopAutomaticVoiceDetection() {
     isListening = false;
     isProcessing = false;
     isSpeaking = false;
+    clearAudioSimulationTimeouts();
     
     if (voiceActivityDetector) {
         clearInterval(voiceActivityDetector);
@@ -483,6 +561,16 @@ function cleanupAudio() {
     analyser = null;
 }
 
+function clearAudioSimulationTimeouts() {
+    if (aiProcessingTimeout) {
+        clearTimeout(aiProcessingTimeout);
+        aiProcessingTimeout = null;
+    }
+    if (aiSpeakingTimeout) {
+        clearTimeout(aiSpeakingTimeout);
+        aiSpeakingTimeout = null;
+    }
+}
 // Screen Selection Functionality
 function setupScreenSelection() {
     screenSelectBtn.addEventListener('click', showScreenSelection);
@@ -515,13 +603,13 @@ function confirmScreenSelection() {
     
     switch (selectionType) {
         case 'entire-screen':
-            addMessage('assistant', '􀉭 Focusing on entire screen');
+            addMessage('assistant', '🖥️ Focusing on the entire screen');
             break;
         case 'active-window':
-            addMessage('assistant', '􀤙 Focusing on active window');
+            addMessage('assistant', '🪟 Focusing on the active window');
             break;
         case 'custom-area':
-            addMessage('assistant', '􀡅 Please select a custom area on your screen');
+            addMessage('assistant', '✏️ Please select a custom area on your screen');
             if (ipcRenderer) {
                 ipcRenderer.invoke('start-region-selection');
             }
@@ -573,12 +661,10 @@ function showTypingIndicator() {
     
     const typingContent = document.createElement('div');
     typingContent.className = 'message-content typing-indicator';
-    
-    for (let i = 0; i < 3; i++) {
-        const dot = document.createElement('div');
-        dot.className = 'typing-dot';
-        typingContent.appendChild(dot);
-    }
+
+    const spinner = document.createElement('div');
+    spinner.className = 'typing-spinner';
+    typingContent.appendChild(spinner);
     
     typingDiv.appendChild(typingContent);
     chatMessages.appendChild(typingDiv);
@@ -604,42 +690,64 @@ async function sendMessage() {
     const message = messageInput.value.trim();
     if (!message || isProcessing) return;
 
+    const historyPayload = conversationHistory.map(entry => ({ ...entry }));
+
     addMessage('user', message);
     messageInput.value = '';
     messageInput.style.height = 'auto';
+    updateSendButtonState();
     setInputState(false);
-    
-    // Reset send button
-    sendBtn.classList.remove('mic-mode');
-    sendBtn.querySelector('.send-icon').textContent = '↑';
-    sendBtn.title = 'Send Message';
+    conversationHistory.push({ role: 'user', content: message });
     
     const typingId = showTypingIndicator();
     
     try {
-        setTimeout(() => {
-            removeTypingIndicator(typingId);
-            const responses = [
-                "I've analyzed your request and created something amazing!",
-                "Based on your prompt, I've crafted a unique creation.",
-                "Your idea has been transformed into something special!",
-                "I've processed your request and the output is ready."
-            ];
-            const response = responses[Math.floor(Math.random() * responses.length)];
-            addMessage('assistant', response);
-            setInputState(true);
-        }, 2000);
+        const baseUrl = await initializeApiConfig();
+
+        const response = await fetch(`${baseUrl}/api/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                message,
+                conversationHistory: historyPayload
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server error (${response.status})`);
+        }
+
+        const data = await response.json();
+
+        removeTypingIndicator(typingId);
+
+        if (!data || data.success !== true) {
+            throw new Error(data?.message || 'Unexpected response from server');
+        }
+
+        const assistantReply = (data.response || '').trim();
+
+        if (assistantReply) {
+            addMessage('assistant', assistantReply);
+            conversationHistory.push({ role: 'assistant', content: assistantReply });
+        } else {
+            addMessage('assistant', 'I received an empty response from the AI.');
+        }
     } catch (error) {
         removeTypingIndicator(typingId);
         addMessage('assistant', `❌ Error: ${error.message}`);
+    } finally {
         setInputState(true);
+        updateSendButtonState();
     }
 }
-
-// Initialize window resizing
-setupWindowResizing();
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
     cleanupAudio();
+    if (ipcRenderer) {
+        ipcRenderer.removeAllListeners('window-state-changed');
+    }
 });

@@ -8,6 +8,7 @@ let overlayWindow = null;
 let regionSelectorWindow = null;
 let capturedScreenshot = null;
 let regionSelectionMode = false;
+let previousChatBounds = null;
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 
 function createOverlayWindow() {
@@ -62,6 +63,33 @@ function createChatWindow() {
   });
 
   chatWindow.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
+
+  previousChatBounds = { ...chatWindow.getBounds() };
+
+  chatWindow.on('maximize', () => {
+    if (chatWindow && chatWindow.webContents) {
+      chatWindow.webContents.send('window-state-changed', { maximized: true });
+    }
+  });
+
+  chatWindow.on('unmaximize', () => {
+    if (chatWindow && previousChatBounds) {
+      chatWindow.setBounds(previousChatBounds);
+    }
+    if (chatWindow && chatWindow.webContents) {
+      chatWindow.webContents.send('window-state-changed', { maximized: false });
+    }
+  });
+
+  const cacheBounds = () => {
+    if (!chatWindow) return;
+    if (!chatWindow.isMaximized() && !chatWindow.isMinimized()) {
+      previousChatBounds = { ...chatWindow.getBounds() };
+    }
+  };
+
+  chatWindow.on('move', cacheBounds);
+  chatWindow.on('resize', cacheBounds);
   
   // Make sure window is transparent and shows properly
   chatWindow.once('ready-to-show', () => {
@@ -79,6 +107,7 @@ function createChatWindow() {
   // Close both windows when chat window closes
   chatWindow.on('closed', () => {
     chatWindow = null;
+    previousChatBounds = null;
     if (overlayWindow) {
       overlayWindow.close();
       overlayWindow = null;
@@ -173,6 +202,7 @@ function closeChat() {
     chatWindow.close();
     chatWindow = null;
   }
+  previousChatBounds = null;
   if (overlayWindow) {
     overlayWindow.close();
     overlayWindow = null;
@@ -280,6 +310,31 @@ ipcMain.handle('close-chat', () => {
 // New handler for closing the app
 ipcMain.on('close-app', () => {
   app.quit();
+});
+
+ipcMain.on('minimize-window', () => {
+  if (chatWindow) {
+    chatWindow.minimize();
+  }
+});
+
+ipcMain.handle('toggle-maximize', () => {
+  if (!chatWindow) {
+    return false;
+  }
+
+  if (chatWindow.isMaximized()) {
+    chatWindow.unmaximize();
+    return false;
+  }
+
+  previousChatBounds = { ...chatWindow.getBounds() };
+  chatWindow.maximize();
+  return true;
+});
+
+ipcMain.handle('get-window-state', () => {
+  return chatWindow ? chatWindow.isMaximized() : false;
 });
 
 ipcMain.handle('get-api-url', () => {
