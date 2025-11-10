@@ -9,6 +9,8 @@ let regionSelectorWindow = null;
 let capturedScreenshot = null;
 let regionSelectionMode = false;
 let previousChatBounds = null;
+let isMaximizingWindow = false;
+let isRestoringWindow = false;
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 
 function createOverlayWindow() {
@@ -67,6 +69,13 @@ function createChatWindow() {
   previousChatBounds = { ...chatWindow.getBounds() };
 
   chatWindow.on('maximize', () => {
+    if (chatWindow && typeof chatWindow.getNormalBounds === 'function') {
+      const normalBounds = chatWindow.getNormalBounds();
+      if (normalBounds && typeof normalBounds.width === 'number' && typeof normalBounds.height === 'number') {
+        previousChatBounds = { ...normalBounds };
+      }
+    }
+    isMaximizingWindow = false;
     if (chatWindow && chatWindow.webContents) {
       chatWindow.webContents.send('window-state-changed', { maximized: true });
     }
@@ -76,6 +85,10 @@ function createChatWindow() {
     if (chatWindow && previousChatBounds) {
       chatWindow.setBounds(previousChatBounds);
     }
+    if (chatWindow) {
+      previousChatBounds = { ...chatWindow.getBounds() };
+    }
+    isRestoringWindow = false;
     if (chatWindow && chatWindow.webContents) {
       chatWindow.webContents.send('window-state-changed', { maximized: false });
     }
@@ -83,6 +96,9 @@ function createChatWindow() {
 
   const cacheBounds = () => {
     if (!chatWindow) return;
+    if (isMaximizingWindow || isRestoringWindow) {
+      return;
+    }
     if (!chatWindow.isMaximized() && !chatWindow.isMinimized()) {
       previousChatBounds = { ...chatWindow.getBounds() };
     }
@@ -193,7 +209,9 @@ async function captureRegion(region) {
     width: cropOptions.width,
     height: cropOptions.height,
     displayId: primaryDisplay.id,
-    region: cropOptions
+    region: cropOptions,
+    focus: 'custom-area',
+    capturedAt: Date.now()
   };
 }
 
@@ -242,7 +260,41 @@ async function captureScreen() {
     image: base64Image,
     width,
     height,
-    displayId: primaryDisplay.id
+    displayId: primaryDisplay.id,
+    focus: 'entire-screen',
+    capturedAt: Date.now()
+  };
+}
+
+async function captureActiveWindow() {
+  const sources = await desktopCapturer.getSources({
+    types: ['window'],
+    thumbnailSize: { width: 1920, height: 1080 },
+    fetchWindowIcons: true
+  });
+
+  if (sources.length === 0) {
+    throw new Error('No window sources available');
+  }
+
+  const filteredSources = sources.filter((source) => {
+    const name = (source.name || '').toLowerCase();
+    return name && !name.includes('overlay') && !name.includes('electron') && !name.includes('taima');
+  });
+
+  const targetSource = filteredSources[0] || sources[0];
+  const imageBuffer = targetSource.thumbnail.toPNG();
+  const base64Image = imageBuffer.toString('base64');
+  const { width, height } = targetSource.thumbnail.getSize();
+
+  return {
+    image: base64Image,
+    width,
+    height,
+    windowId: targetSource.id,
+    windowName: targetSource.name,
+    focus: 'active-window',
+    capturedAt: Date.now()
   };
 }
 
@@ -258,7 +310,7 @@ function registerGlobalShortcut() {
       }
 
       // Capture screen first
-      capturedScreenshot = await captureScreen();
+  capturedScreenshot = await captureScreen();
       
       // Create overlay (blurred background)
       // createOverlayWindow();
@@ -324,11 +376,13 @@ ipcMain.handle('toggle-maximize', () => {
   }
 
   if (chatWindow.isMaximized()) {
+    isRestoringWindow = true;
     chatWindow.unmaximize();
     return false;
   }
 
   previousChatBounds = { ...chatWindow.getBounds() };
+  isMaximizingWindow = true;
   chatWindow.maximize();
   return true;
 });
@@ -343,6 +397,24 @@ ipcMain.handle('get-api-url', () => {
 
 ipcMain.handle('get-screenshot', () => {
   return capturedScreenshot;
+});
+
+ipcMain.handle('capture-entire-screen', async () => {
+  const screenshot = await captureScreen();
+  capturedScreenshot = screenshot;
+  if (chatWindow) {
+    chatWindow.webContents.send('screenshot-captured', screenshot);
+  }
+  return screenshot;
+});
+
+ipcMain.handle('capture-active-window', async () => {
+  const screenshot = await captureActiveWindow();
+  capturedScreenshot = screenshot;
+  if (chatWindow) {
+    chatWindow.webContents.send('screenshot-captured', screenshot);
+  }
+  return screenshot;
 });
 
 ipcMain.handle('start-region-selection', () => {

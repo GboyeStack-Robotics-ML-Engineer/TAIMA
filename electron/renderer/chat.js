@@ -1,4 +1,14 @@
 const { ipcRenderer } = require('electron');
+const { marked } = require('marked');
+const createDOMPurify = require('dompurify');
+
+const DOMPurify = typeof window !== 'undefined'
+    ? createDOMPurify(window)
+    : { sanitize: (value) => value };
+marked.setOptions({
+    gfm: true,
+    breaks: true
+});
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -24,6 +34,9 @@ const screenSelectionOverlay = document.getElementById('screenSelectionOverlay')
 const cancelSelection = document.getElementById('cancelSelection');
 const confirmSelection = document.getElementById('confirmSelection');
 const backToTextBtn = document.getElementById('backToTextBtn');
+const suggestionBar = document.getElementById('suggestionBar');
+const suggestionChips = document.getElementById('suggestionChips');
+const refreshSuggestionsBtn = document.getElementById('refreshSuggestionsBtn');
 
 
 // State
@@ -51,6 +64,18 @@ let aiProcessingTimeout = null;
 let aiSpeakingTimeout = null;
 let conversationHistory = [];
 let apiBaseUrl = null;
+let currentFocusMode = 'entire-screen';
+let currentScreenshot = null;
+let screenSuggestions = [];
+let suggestionsLoading = false;
+let suggestionError = null;
+let suggestionRefreshTimeout = null;
+
+const focusLabels = {
+    'entire-screen': 'entire screen',
+    'active-window': 'active window',
+    'custom-area': 'selected area'
+};
 
 function updateSendButtonState() {
     const hasText = messageInput.value.trim().length > 0;
@@ -76,6 +101,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupWindowResizing();
     initializeWindowStateSync();
     initializeApiConfig();
+    setupSuggestionControls();
+    initializeScreenshotState();
 
     // Add back to text button event listener
     if (backToTextBtn) {
@@ -595,26 +622,220 @@ function hideScreenSelection() {
     screenSelectionOverlay.classList.add('hidden');
 }
 
-function confirmScreenSelection() {
+async function confirmScreenSelection() {
     const selectedOption = document.querySelector('.selection-option.active');
     const selectionType = selectedOption?.dataset.type || 'entire-screen';
     
     hideScreenSelection();
-    
-    switch (selectionType) {
-        case 'entire-screen':
-            addMessage('assistant', '🖥️ Focusing on the entire screen');
-            break;
-        case 'active-window':
-            addMessage('assistant', '🪟 Focusing on the active window');
-            break;
-        case 'custom-area':
-            addMessage('assistant', '✏️ Please select a custom area on your screen');
-            if (ipcRenderer) {
-                ipcRenderer.invoke('start-region-selection');
-            }
-            break;
+    try {
+        await handleFocusModeChange(selectionType);
+    } catch (error) {
+        console.error('Error updating focus mode:', error);
+        addMessage('assistant', '⚠️ Something went wrong while updating the screen focus.');
     }
+}
+
+function setupSuggestionControls() {
+    if (!suggestionBar || !suggestionChips) {
+        return;
+    }
+
+    if (refreshSuggestionsBtn) {
+        refreshSuggestionsBtn.addEventListener('click', () => {
+            refreshSuggestions('manual', { force: true });
+        });
+    }
+
+    renderSuggestions();
+}
+
+function renderSuggestions() {
+    if (!suggestionBar || !suggestionChips) {
+        return;
+    }
+
+    suggestionChips.innerHTML = '';
+
+    if (suggestionsLoading) {
+        suggestionBar.classList.remove('hidden');
+        const loadingChip = document.createElement('div');
+        loadingChip.className = 'suggestion-chip loading';
+        loadingChip.textContent = 'Fetching ideas…';
+        suggestionChips.appendChild(loadingChip);
+        if (refreshSuggestionsBtn) {
+            refreshSuggestionsBtn.disabled = true;
+        }
+        return;
+    }
+
+    if (suggestionError) {
+        suggestionBar.classList.remove('hidden');
+        const errorChip = document.createElement('div');
+        errorChip.className = 'suggestion-chip empty';
+        errorChip.textContent = suggestionError;
+        suggestionChips.appendChild(errorChip);
+        if (refreshSuggestionsBtn) {
+            refreshSuggestionsBtn.disabled = false;
+        }
+        return;
+    }
+
+    if (!screenSuggestions.length) {
+        suggestionBar.classList.add('hidden');
+        if (refreshSuggestionsBtn) {
+            refreshSuggestionsBtn.disabled = false;
+        }
+        return;
+    }
+
+    suggestionBar.classList.remove('hidden');
+
+    screenSuggestions.forEach((suggestion) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'suggestion-chip';
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'chip-icon';
+        iconSpan.textContent = '✨';
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = suggestion.label;
+        chip.appendChild(iconSpan);
+        chip.appendChild(labelSpan);
+        chip.addEventListener('click', () => handleSuggestionClick(suggestion));
+        suggestionChips.appendChild(chip);
+    });
+
+    if (refreshSuggestionsBtn) {
+        refreshSuggestionsBtn.disabled = false;
+    }
+}
+
+function handleSuggestionClick(suggestion) {
+    if (!suggestion) {
+        return;
+    }
+
+    const promptText = (suggestion.prompt || suggestion.label || '').trim();
+    if (!promptText) {
+        return;
+    }
+
+    messageInput.value = promptText;
+    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    messageInput.focus();
+}
+
+function scheduleSuggestionsRefresh(reason = 'auto') {
+    if (suggestionsLoading && reason !== 'manual') {
+        return;
+    }
+
+    if (suggestionRefreshTimeout) {
+        clearTimeout(suggestionRefreshTimeout);
+        suggestionRefreshTimeout = null;
+    }
+
+    const delay = reason === 'auto' ? 350 : 50;
+    suggestionRefreshTimeout = setTimeout(() => {
+        refreshSuggestions(reason);
+    }, delay);
+}
+
+async function refreshSuggestions(reason = 'auto', options = {}) {
+    if (!ipcRenderer) {
+        return;
+    }
+
+    if (!currentScreenshot?.image) {
+        screenSuggestions = [];
+        suggestionError = null;
+        suggestionsLoading = false;
+        renderSuggestions();
+        return;
+    }
+
+    if (suggestionsLoading && !options.force) {
+        return;
+    }
+
+    suggestionsLoading = true;
+    suggestionError = null;
+    renderSuggestions();
+
+    try {
+        const baseUrl = await initializeApiConfig();
+        const response = await fetch(`${baseUrl}/api/suggestions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                image: currentScreenshot.image,
+                screenMetadata: {
+                    focus: currentScreenshot.focus,
+                    width: currentScreenshot.width,
+                    height: currentScreenshot.height,
+                    windowName: currentScreenshot.windowName,
+                    capturedAt: currentScreenshot.capturedAt,
+                    displayId: currentScreenshot.displayId
+                }
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server error (${response.status})`);
+        }
+
+        const data = await response.json();
+        const incoming = Array.isArray(data?.suggestions) ? data.suggestions : [];
+
+        screenSuggestions = incoming
+            .map((entry, index) => normalizeSuggestion(entry, index))
+            .filter(Boolean)
+            .slice(0, 6);
+
+        if (!screenSuggestions.length) {
+            suggestionError = 'No quick suggestions right now.';
+        }
+    } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        suggestionError = 'Unable to load suggestions right now.';
+        screenSuggestions = [];
+    } finally {
+        suggestionsLoading = false;
+        renderSuggestions();
+    }
+}
+
+function normalizeSuggestion(entry, index) {
+    if (!entry) {
+        return null;
+    }
+
+    if (typeof entry === 'string') {
+        const trimmed = entry.trim();
+        if (!trimmed) {
+            return null;
+        }
+        return {
+            id: `suggestion-${index}`,
+            label: trimmed,
+            prompt: trimmed
+        };
+    }
+
+    const label = (entry.label || entry.title || entry.name || entry.prompt || '').toString().trim();
+    const prompt = (entry.prompt || entry.action || entry.text || label).toString().trim();
+
+    if (!label || !prompt) {
+        return null;
+    }
+
+    return {
+        id: entry.id || `suggestion-${index}`,
+        label,
+        prompt
+    };
 }
 
 // Window Movement (existing implementation)
@@ -639,13 +860,26 @@ function loadWindowPosition() {
 }
 
 // Message Handling
+function renderMarkdown(content) {
+    if (!content) {
+        return '';
+    }
+
+    try {
+        return DOMPurify.sanitize(marked.parse(content));
+    } catch (error) {
+        console.error('Markdown rendering failed:', error);
+        return DOMPurify.sanitize(content);
+    }
+}
+
 function addMessage(role, content) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}`;
     
     const messageContent = document.createElement('div');
     messageContent.className = 'message-content';
-    messageContent.textContent = content;
+    messageContent.innerHTML = renderMarkdown(content);
     
     messageDiv.appendChild(messageContent);
     chatMessages.appendChild(messageDiv);
@@ -703,16 +937,32 @@ async function sendMessage() {
     
     try {
         const baseUrl = await initializeApiConfig();
+        const screenContext = await getScreenContextForRequest();
+
+        const payload = {
+            message,
+            conversationHistory: historyPayload
+        };
+
+        if (screenContext?.image) {
+            payload.image = screenContext.image;
+            payload.screenMetadata = {
+                focus: screenContext.focus || currentFocusMode,
+                width: screenContext.width,
+                height: screenContext.height,
+                capturedAt: screenContext.capturedAt,
+                displayId: screenContext.displayId,
+                windowId: screenContext.windowId,
+                windowName: screenContext.windowName
+            };
+        }
 
         const response = await fetch(`${baseUrl}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                message,
-                conversationHistory: historyPayload
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -749,5 +999,139 @@ window.addEventListener('beforeunload', () => {
     cleanupAudio();
     if (ipcRenderer) {
         ipcRenderer.removeAllListeners('window-state-changed');
+        ipcRenderer.removeAllListeners('screenshot-captured');
+        ipcRenderer.removeAllListeners('error');
     }
 });
+
+async function initializeScreenshotState() {
+    if (!ipcRenderer) {
+        return;
+    }
+
+    ipcRenderer.on('screenshot-captured', (_, payload) => {
+        const shouldAnnounce = payload?.focus === 'custom-area';
+        updateScreenshotState(payload, { announce: shouldAnnounce });
+    });
+
+    ipcRenderer.on('error', (_, message) => {
+        if (message) {
+            addMessage('assistant', `❌ ${message}`);
+        }
+    });
+
+    try {
+        const existing = await ipcRenderer.invoke('get-screenshot');
+        if (existing?.image) {
+            updateScreenshotState(existing, { announce: false });
+        } else {
+            await captureFocusScreenshot(currentFocusMode, { announce: false });
+        }
+    } catch (error) {
+        console.error('Error initializing screenshot state:', error);
+    }
+}
+
+function updateScreenshotState(screenshot, options = {}) {
+    if (!screenshot || !screenshot.image) {
+        return;
+    }
+
+    const normalizedFocus = screenshot.focus || currentFocusMode;
+    currentScreenshot = {
+        ...screenshot,
+        focus: normalizedFocus,
+        capturedAt: screenshot.capturedAt || Date.now()
+    };
+
+    if (options.announce) {
+        const readableFocus = focusLabels[normalizedFocus] || 'screen';
+        addMessage('assistant', `✅ Updated ${readableFocus} snapshot for context.`);
+    }
+}
+
+async function captureFocusScreenshot(mode, options = {}) {
+    if (!ipcRenderer) {
+        return null;
+    }
+
+    try {
+        let response = null;
+
+        if (mode === 'entire-screen') {
+            response = await ipcRenderer.invoke('capture-entire-screen');
+        } else if (mode === 'active-window') {
+            response = await ipcRenderer.invoke('capture-active-window');
+        } else {
+            response = await ipcRenderer.invoke('get-screenshot');
+        }
+
+        if (response?.image) {
+            updateScreenshotState({ ...response, focus: response.focus || mode }, { announce: options.announce === true });
+            return response;
+        }
+
+        if (options.announce) {
+            addMessage('assistant', '⚠️ Unable to capture the requested screen view.');
+        }
+    } catch (error) {
+        console.error('Error capturing screen context:', error);
+        if (options.announce) {
+            addMessage('assistant', '⚠️ Something went wrong while capturing the screen.');
+        }
+    }
+
+    return null;
+}
+
+async function handleFocusModeChange(mode) {
+    currentFocusMode = mode;
+
+    switch (mode) {
+        case 'entire-screen':
+            addMessage('assistant', '🖥️ Focusing on the entire screen. Capturing a fresh snapshot...');
+            await captureFocusScreenshot('entire-screen', { announce: true });
+            break;
+        case 'active-window':
+            addMessage('assistant', '🪟 Focusing on the active window. Bring the window to the front if needed.');
+            await captureFocusScreenshot('active-window', { announce: true });
+            break;
+        case 'custom-area':
+            addMessage('assistant', '✏️ Please select a custom area on your screen');
+            if (ipcRenderer) {
+                await ipcRenderer.invoke('start-region-selection');
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+async function getScreenContextForRequest() {
+    if (!ipcRenderer) {
+        return null;
+    }
+
+    if (currentFocusMode === 'custom-area') {
+        if (currentScreenshot?.focus === 'custom-area') {
+            return currentScreenshot;
+        }
+
+        try {
+            const stored = await ipcRenderer.invoke('get-screenshot');
+            if (stored?.image) {
+                updateScreenshotState(stored, { announce: false });
+                if (stored.focus === 'custom-area') {
+                    return stored;
+                }
+            }
+        } catch (error) {
+            console.error('Error retrieving stored custom area screenshot:', error);
+        }
+
+        return null;
+    }
+
+    await captureFocusScreenshot(currentFocusMode, { announce: false });
+    return currentScreenshot;
+}

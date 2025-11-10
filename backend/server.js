@@ -23,7 +23,7 @@ app.get('/health', (req, res) => {
 // Chat endpoint with optional image
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, image, conversationHistory = [] } = req.body;
+    const { message, image, screenMetadata, conversationHistory = [] } = req.body;
 
     if (!message && !image) {
       return res.status(400).json({ error: 'No message or image provided' });
@@ -52,6 +52,35 @@ app.post('/api/chat', async (req, res) => {
     
     // Add image if provided
     if (image) {
+      const metaDetails = [];
+
+      if (screenMetadata?.focus) {
+        metaDetails.push(`Focus: ${screenMetadata.focus}`);
+      }
+
+      if (screenMetadata?.windowName) {
+        metaDetails.push(`Window: ${screenMetadata.windowName}`);
+      }
+
+      if (screenMetadata?.width && screenMetadata?.height) {
+        metaDetails.push(`Resolution: ${screenMetadata.width}x${screenMetadata.height}`);
+      }
+
+      if (screenMetadata?.capturedAt) {
+        const capturedAtIso = new Date(screenMetadata.capturedAt).toISOString();
+        metaDetails.push(`Captured at: ${capturedAtIso}`);
+      }
+
+      if (screenMetadata?.displayId) {
+        metaDetails.push(`Display ID: ${screenMetadata.displayId}`);
+      }
+
+      const metaText = metaDetails.join(' | ');
+
+      parts.push({
+        text: `Attached screenshot for context.${metaText ? ` ${metaText}.` : ''}`
+      });
+
       parts.push({
         inlineData: {
           data: image,
