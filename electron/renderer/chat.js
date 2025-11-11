@@ -37,6 +37,10 @@ const backToTextBtn = document.getElementById('backToTextBtn');
 const suggestionBar = document.getElementById('suggestionBar');
 const suggestionChips = document.getElementById('suggestionChips');
 const refreshSuggestionsBtn = document.getElementById('refreshSuggestionsBtn');
+const toggleSuggestionsBtn = document.getElementById('toggleSuggestionsBtn');
+const googleConnectBtn = document.getElementById('googleConnectBtn');
+const googleConnectLabel = googleConnectBtn ? googleConnectBtn.querySelector('.control-label') : null;
+const googleStatusPill = document.getElementById('googleStatusPill');
 
 
 // State
@@ -70,6 +74,16 @@ let screenSuggestions = [];
 let suggestionsLoading = false;
 let suggestionError = null;
 let suggestionRefreshTimeout = null;
+const MAX_SUGGESTIONS = 6;
+let suggestionsCollapsed = true;
+let suggestionsCollapsedByUser = true;
+let googleStatus = { connected: false, profile: null, scopes: [] };
+let googleStatusPollInterval = null;
+let googleStatusPollTimeout = null;
+let googleConnectBtnLoading = false;
+let googleAuthAttemptActive = false;
+let googleStatusFetchPromise = null;
+let googleQuickPollDeadline = 0;
 
 const focusLabels = {
     'entire-screen': 'entire screen',
@@ -102,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeWindowStateSync();
     initializeApiConfig();
     setupSuggestionControls();
+    initializeGoogleIntegration();
     initializeScreenshotState();
 
     // Add back to text button event listener
@@ -598,6 +613,284 @@ function clearAudioSimulationTimeouts() {
         aiSpeakingTimeout = null;
     }
 }
+
+// Google account integration
+function initializeGoogleIntegration() {
+    if (!googleConnectBtn || !googleStatusPill) {
+        return;
+    }
+
+    updateGoogleStatusUI();
+
+    googleConnectBtn.addEventListener('click', handleGoogleConnectClick);
+
+    if (ipcRenderer) {
+        ipcRenderer.on('google-auth-closed', handleGoogleAuthClosed);
+    }
+
+    refreshGoogleStatus({ reason: 'init', silent: true, skipSuggestionRefresh: true })
+        .catch((error) => {
+            console.error('Error loading Google status:', error);
+        })
+        .finally(() => {
+            startGoogleStatusPolling();
+        });
+}
+
+async function refreshGoogleStatus(options = {}) {
+    if (!googleConnectBtn || !googleStatusPill) {
+        return googleStatus;
+    }
+
+    if (googleStatusFetchPromise) {
+        return googleStatusFetchPromise;
+    }
+
+    googleStatusFetchPromise = (async () => {
+        try {
+            const baseUrl = await initializeApiConfig();
+            const response = await fetch(`${baseUrl}/api/google/status`, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                cache: 'no-store'
+            });
+
+            if (!response.ok) {
+                throw new Error(`Status request failed (${response.status})`);
+            }
+
+            const data = await response.json();
+            return applyGoogleStatusUpdate(data, options);
+        } catch (error) {
+            if (!options.silent) {
+                console.error('Error refreshing Google status:', error);
+            }
+            return googleStatus;
+        }
+    })();
+
+    try {
+        return await googleStatusFetchPromise;
+    } finally {
+        googleStatusFetchPromise = null;
+    }
+}
+
+function applyGoogleStatusUpdate(raw, options = {}) {
+    const previousConnected = Boolean(googleStatus.connected);
+    googleStatus = {
+        connected: Boolean(raw?.connected),
+        profile: raw?.profile || null,
+        scopes: Array.isArray(raw?.scopes) ? raw.scopes : []
+    };
+
+    if (googleStatus.connected) {
+        googleAuthAttemptActive = false;
+        setGoogleConnectButtonLoading(false);
+    }
+
+    updateGoogleStatusUI();
+
+    if (previousConnected !== googleStatus.connected && !options.skipSuggestionRefresh) {
+        scheduleSuggestionsRefresh('service');
+    }
+
+    return googleStatus;
+}
+
+function updateGoogleStatusUI() {
+    if (!googleStatusPill) {
+        return;
+    }
+
+    const connected = Boolean(googleStatus.connected);
+    const profileEmail = getGoogleProfileEmail();
+    const pillLabel = connected
+        ? (profileEmail ? `Google connected - ${profileEmail}` : 'Google connected')
+        : 'Google disconnected';
+
+    googleStatusPill.textContent = pillLabel;
+    googleStatusPill.classList.toggle('connected', connected);
+    googleStatusPill.classList.toggle('disconnected', !connected);
+
+    if (googleConnectBtn) {
+        googleConnectBtn.classList.toggle('connected', connected);
+        if (!googleConnectBtnLoading && googleConnectLabel) {
+            googleConnectLabel.textContent = connected ? 'Manage Google' : 'Connect Google';
+        }
+        if (!googleConnectBtnLoading) {
+            googleConnectBtn.title = connected
+                ? 'Manage Google account connection'
+                : 'Connect Google account';
+        }
+    }
+}
+
+function setGoogleConnectButtonLoading(loading, temporaryLabel) {
+    if (!googleConnectBtn) {
+        return;
+    }
+
+    googleConnectBtnLoading = Boolean(loading);
+    googleConnectBtn.disabled = googleConnectBtnLoading;
+
+    if (googleConnectBtnLoading) {
+        if (googleConnectLabel && temporaryLabel) {
+            googleConnectLabel.textContent = temporaryLabel;
+        }
+        googleConnectBtn.title = 'Complete the Google sign-in flow';
+    } else {
+        if (googleConnectLabel) {
+            googleConnectLabel.textContent = googleStatus.connected ? 'Manage Google' : 'Connect Google';
+        }
+        googleConnectBtn.title = googleStatus.connected
+            ? 'Manage Google account connection'
+            : 'Connect Google account';
+    }
+}
+
+function getGoogleProfileEmail() {
+    if (!googleStatus?.profile) {
+        return '';
+    }
+    return googleStatus.profile.emailAddress
+        || googleStatus.profile.primaryEmail
+        || googleStatus.profile.email
+        || '';
+}
+
+async function handleGoogleConnectClick() {
+    if (googleConnectBtnLoading) {
+        return;
+    }
+
+    if (!googleStatus.connected) {
+        await startGoogleAuthFlow();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Disconnect Google from TAIMA? The assistant will lose access to calendar and Gmail actions.'
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    await disconnectGoogleAccount();
+}
+
+async function startGoogleAuthFlow() {
+    if (!ipcRenderer) {
+        addMessage('assistant', '❌ Google authentication is not available in this environment.');
+        return false;
+    }
+
+    setGoogleConnectButtonLoading(true, 'Opening...');
+
+    try {
+        const opened = await ipcRenderer.invoke('start-google-auth');
+        if (opened === false) {
+            setGoogleConnectButtonLoading(false);
+            addMessage('assistant', '❌ Unable to open Google sign-in window.');
+            return false;
+        }
+
+        googleAuthAttemptActive = true;
+        startGoogleStatusQuickPoll();
+        return true;
+    } catch (error) {
+        console.error('Error starting Google auth flow:', error);
+        setGoogleConnectButtonLoading(false);
+        addMessage('assistant', '❌ Failed to start Google authentication.');
+        return false;
+    }
+}
+
+async function disconnectGoogleAccount() {
+    setGoogleConnectButtonLoading(true, 'Disconnecting...');
+
+    try {
+        const baseUrl = await initializeApiConfig();
+        const response = await fetch(`${baseUrl}/api/google/disconnect`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            throw new Error(`Disconnect failed (${response.status})`);
+        }
+
+        await refreshGoogleStatus({ reason: 'disconnect', silent: false });
+    } catch (error) {
+        console.error('Error disconnecting Google account:', error);
+        addMessage('assistant', '❌ Failed to disconnect Google account. Please try again.');
+    } finally {
+        setGoogleConnectButtonLoading(false);
+    }
+}
+
+function startGoogleStatusPolling() {
+    if (googleStatusPollInterval) {
+        return;
+    }
+
+    googleStatusPollInterval = setInterval(() => {
+        refreshGoogleStatus({ reason: 'interval', silent: true }).catch(() => {});
+    }, 60000);
+}
+
+function stopGoogleStatusPolling() {
+    if (googleStatusPollInterval) {
+        clearInterval(googleStatusPollInterval);
+        googleStatusPollInterval = null;
+    }
+    if (googleStatusPollTimeout) {
+        clearTimeout(googleStatusPollTimeout);
+        googleStatusPollTimeout = null;
+    }
+    googleQuickPollDeadline = 0;
+}
+
+function startGoogleStatusQuickPoll(durationMs = 20000, intervalMs = 2000) {
+    googleQuickPollDeadline = Date.now() + durationMs;
+
+    const poll = async () => {
+        googleStatusPollTimeout = null;
+        try {
+            await refreshGoogleStatus({ reason: 'quick-poll', silent: true });
+            if (googleStatus.connected) {
+                googleQuickPollDeadline = 0;
+                return;
+            }
+        } catch (error) {
+            // Ignore rapid poll failures
+        }
+
+        if (Date.now() < googleQuickPollDeadline) {
+            googleStatusPollTimeout = setTimeout(poll, intervalMs);
+        } else {
+            googleQuickPollDeadline = 0;
+        }
+    };
+
+    if (googleStatusPollTimeout) {
+        clearTimeout(googleStatusPollTimeout);
+        googleStatusPollTimeout = null;
+    }
+
+    googleStatusPollTimeout = setTimeout(poll, intervalMs);
+}
+
+function handleGoogleAuthClosed() {
+    setGoogleConnectButtonLoading(false);
+
+    if (googleAuthAttemptActive) {
+        googleAuthAttemptActive = false;
+        startGoogleStatusQuickPoll(15000, 1500);
+    } else {
+        refreshGoogleStatus({ reason: 'auth-closed', silent: true }).catch(() => {});
+    }
+}
+
 // Screen Selection Functionality
 function setupScreenSelection() {
     screenSelectBtn.addEventListener('click', showScreenSelection);
@@ -646,7 +939,14 @@ function setupSuggestionControls() {
         });
     }
 
+    if (toggleSuggestionsBtn) {
+        toggleSuggestionsBtn.addEventListener('click', () => {
+            setSuggestionsCollapsed(!suggestionsCollapsed, { userInitiated: true });
+        });
+    }
+
     renderSuggestions();
+    setSuggestionsCollapsed(true, { userInitiated: false, preservePreference: true });
 }
 
 function renderSuggestions() {
@@ -658,6 +958,11 @@ function renderSuggestions() {
 
     if (suggestionsLoading) {
         suggestionBar.classList.remove('hidden');
+        if (!suggestionsCollapsedByUser) {
+            setSuggestionsCollapsed(false, { userInitiated: false });
+        } else {
+            setSuggestionsCollapsed(true, { userInitiated: false, preservePreference: true });
+        }
         const loadingChip = document.createElement('div');
         loadingChip.className = 'suggestion-chip loading';
         loadingChip.textContent = 'Fetching ideas…';
@@ -670,6 +975,11 @@ function renderSuggestions() {
 
     if (suggestionError) {
         suggestionBar.classList.remove('hidden');
+        if (!suggestionsCollapsedByUser) {
+            setSuggestionsCollapsed(false, { userInitiated: false });
+        } else {
+            setSuggestionsCollapsed(true, { userInitiated: false, preservePreference: true });
+        }
         const errorChip = document.createElement('div');
         errorChip.className = 'suggestion-chip empty';
         errorChip.textContent = suggestionError;
@@ -682,6 +992,7 @@ function renderSuggestions() {
 
     if (!screenSuggestions.length) {
         suggestionBar.classList.add('hidden');
+        setSuggestionsCollapsed(true, { userInitiated: false, preservePreference: true });
         if (refreshSuggestionsBtn) {
             refreshSuggestionsBtn.disabled = false;
         }
@@ -689,6 +1000,12 @@ function renderSuggestions() {
     }
 
     suggestionBar.classList.remove('hidden');
+
+    if (!suggestionsCollapsedByUser) {
+        setSuggestionsCollapsed(false, { userInitiated: false });
+    } else {
+        setSuggestionsCollapsed(suggestionsCollapsed, { userInitiated: false, preservePreference: true });
+    }
 
     screenSuggestions.forEach((suggestion) => {
         const chip = document.createElement('button');
@@ -704,6 +1021,8 @@ function renderSuggestions() {
         chip.addEventListener('click', () => handleSuggestionClick(suggestion));
         suggestionChips.appendChild(chip);
     });
+
+    suggestionChips.scrollTop = 0;
 
     if (refreshSuggestionsBtn) {
         refreshSuggestionsBtn.disabled = false;
@@ -792,10 +1111,14 @@ async function refreshSuggestions(reason = 'auto', options = {}) {
         screenSuggestions = incoming
             .map((entry, index) => normalizeSuggestion(entry, index))
             .filter(Boolean)
-            .slice(0, 6);
+            .slice(0, MAX_SUGGESTIONS);
 
         if (!screenSuggestions.length) {
             suggestionError = 'No quick suggestions right now.';
+        } else if (!suggestionsCollapsedByUser) {
+            setSuggestionsCollapsed(false, { userInitiated: false });
+        } else {
+            setSuggestionsCollapsed(true, { userInitiated: false, preservePreference: true });
         }
     } catch (error) {
         console.error('Error fetching suggestions:', error);
@@ -804,6 +1127,37 @@ async function refreshSuggestions(reason = 'auto', options = {}) {
     } finally {
         suggestionsLoading = false;
         renderSuggestions();
+    }
+}
+
+function setSuggestionsCollapsed(collapsed, options = {}) {
+    const { userInitiated = false, preservePreference = false } = options;
+
+    suggestionsCollapsed = collapsed;
+
+    if (userInitiated) {
+        suggestionsCollapsedByUser = collapsed;
+    } else if (!preservePreference && !collapsed) {
+        suggestionsCollapsedByUser = false;
+    }
+
+    if (suggestionBar) {
+        suggestionBar.classList.toggle('collapsed', collapsed);
+    }
+
+    if (toggleSuggestionsBtn) {
+        toggleSuggestionsBtn.setAttribute('aria-expanded', String(!collapsed));
+        toggleSuggestionsBtn.title = collapsed ? 'Expand suggestions' : 'Collapse suggestions';
+
+        const hiddenLabel = toggleSuggestionsBtn.querySelector('.visually-hidden');
+        if (hiddenLabel) {
+            hiddenLabel.textContent = collapsed ? 'Expand suggestions' : 'Collapse suggestions';
+        }
+
+        const icon = toggleSuggestionsBtn.querySelector('.toggle-icon');
+        if (icon) {
+            icon.textContent = collapsed ? '▸' : '▾';
+        }
     }
 }
 
@@ -985,6 +1339,8 @@ async function sendMessage() {
         } else {
             addMessage('assistant', 'I received an empty response from the AI.');
         }
+
+        scheduleSuggestionsRefresh('chat');
     } catch (error) {
         removeTypingIndicator(typingId);
         addMessage('assistant', `❌ Error: ${error.message}`);
@@ -997,10 +1353,12 @@ async function sendMessage() {
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
     cleanupAudio();
+    stopGoogleStatusPolling();
     if (ipcRenderer) {
         ipcRenderer.removeAllListeners('window-state-changed');
         ipcRenderer.removeAllListeners('screenshot-captured');
         ipcRenderer.removeAllListeners('error');
+        ipcRenderer.removeListener('google-auth-closed', handleGoogleAuthClosed);
     }
 });
 
@@ -1047,6 +1405,10 @@ function updateScreenshotState(screenshot, options = {}) {
     if (options.announce) {
         const readableFocus = focusLabels[normalizedFocus] || 'screen';
         addMessage('assistant', `✅ Updated ${readableFocus} snapshot for context.`);
+    }
+
+    if (options.skipSuggestions !== true) {
+        scheduleSuggestionsRefresh('capture');
     }
 }
 

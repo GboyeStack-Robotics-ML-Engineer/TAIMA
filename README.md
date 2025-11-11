@@ -50,14 +50,12 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ```env
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_REDIRECT_URI=http://localhost:3001/auth/callback
+GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
 ```
 
-6. Get refresh token:
-   - Start the backend: `cd backend && npm start`
-   - Visit: `http://localhost:3001/auth/google`
-   - Authorize and copy the refresh token
-   - Add to `.env`: `GOOGLE_REFRESH_TOKEN=your_refresh_token`
+6. In the Google Cloud Console, open the OAuth consent screen and add your Google account under **Test users** (required while the app is in testing mode).
+
+7. Launch the app (`npm run dev`) and click **Connect Google** in the header. Complete the consent flow—tokens are stored automatically in `backend/google-tokens.json`.
 
 ### 4. Run the Application
 
@@ -122,7 +120,6 @@ Create `backend/.env` file with:
 - `GEMINI_API_KEY`: Your Google Gemini API key
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID
 - `GOOGLE_CLIENT_SECRET`: Google OAuth client secret
-- `GOOGLE_REFRESH_TOKEN`: OAuth refresh token
 - `PORT`: Backend server port (default: 3001)
 - `TIMEZONE`: Your timezone (default: America/New_York)
 
@@ -135,7 +132,7 @@ Create `backend/.env` file with:
 
 ### Calendar events not created
 - Verify Google Calendar API credentials
-- Check that refresh token is valid
+- Make sure the Google account is connected (use the Connect Google button in the app)
 - Ensure Calendar API is enabled in Google Cloud Console
 
 ### AI not extracting tasks correctly
@@ -152,6 +149,25 @@ Create `backend/.env` file with:
 - [ ] Support for recurring events
 - [ ] Multi-screen support
 - [ ] Task categories and tags
+
+## AI Acceleration Report
+
+### AI in Our Process
+
+- **Cursor** for rapid file navigation, diff previews, and inline code completions inside the Electron and backend projects.
+- **GitHub Copilot** (this agent) to scaffold Google OAuth flows, reconcile renderer logic, and iterate on UI state management.
+- **OpenAI ChatGPT** sessions used as a whiteboard for prompt wording, OAuth edge-case checks, and documentation drafts.
+
+### Impact on Workflow
+
+- AI pair-programming trimmed implementation time for Google Calendar and Gmail integration by autocompleting boilerplate OAuth handlers and catching missing cleanup steps.
+- Conversational planning with ChatGPT surfaced alternative polling strategies and reduced debugging churn around token refresh logic.
+- Cursor’s context-aware suggestions accelerated refactors by keeping backend and renderer changes synchronized without manual search-and-replace sweeps.
+
+### AI in Our Product
+
+- TAIMA itself uses Google’s **Gemini 2.0 Pro/Gemini 2.5** models via the `@google/generative-ai` SDK to interpret natural-language and visual inputs, draft responses, and emit structured action plans.
+- Calendar and email automation rely on Google’s official **Calendar** and **Gmail** REST APIs accessed through the `googleapis` Node.js client, enabling end-to-end scheduling and communication workflows.
 
 ## License
 

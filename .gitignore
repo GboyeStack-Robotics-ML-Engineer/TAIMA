@@ -8,4 +8,5 @@ backend/.env
 .DS_Store
 *.pem
 electron/assets/icon.png
+backend/google-tokens.json
 

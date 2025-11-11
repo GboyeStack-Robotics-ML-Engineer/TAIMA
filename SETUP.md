@@ -37,11 +37,11 @@ If you already have OAuth credentials, skip to Step 4.
 
 ```env
 GEMINI_API_KEY=your_actual_api_key_here
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.5-pro
 
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_REDIRECT_URI=http://localhost:3001/auth/callback
+GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
 ```
 
 ## Step 5: Configure Redirect URI in Google Cloud Console
@@ -53,55 +53,24 @@ GOOGLE_REDIRECT_URI=http://localhost:3001/auth/callback
 3. Go to **APIs & Services** → **Credentials**
 4. Click on your OAuth 2.0 Client ID
 5. Under **Authorized redirect URIs**, click **Add URI**
-6. Add: `http://localhost:3001/auth/callback`
+6. Add: `http://localhost:3001/auth/google/callback`
 7. Click **Save**
 
-## Step 6: Get Google Refresh Token
+## Step 6: Authorize Google Access
 
-### Important: Revoke Existing Access First (if already authorized)
-
-If you've already authorized this app before, Google won't provide a refresh token. You need to revoke access first:
-
-1. Go to [Google Account Permissions](https://myaccount.google.com/permissions)
-2. Find your app (or "Solid Coder" / your project name)
-3. Click **Remove Access** or **Revoke**
-
-### Now Get the Refresh Token:
-s
-1. Start the backend server:
+1. In the Google Cloud Console, open **OAuth consent screen** and add the Gmail/Calendar account you plan to use under **Test users** (required while the app is unverified).
+2. Start the stack:
    ```bash
-   cd backend
-   npm start
+   npm run dev
    ```
+3. In the Electron window, click the **Connect Google** button.
+4. Complete the OAuth consent flow. When the window closes, tokens are stored automatically in `backend/google-tokens.json` and future refreshes are handled for you.
 
-2. Open your browser and visit:
-   ```
-   http://localhost:3001/auth/google
-   ```
+### Troubleshooting
 
-3. **Important:** Make sure you see the consent screen asking for permission. If you're automatically signed in without seeing a consent screen, you won't get a refresh token.
-
-4. Click **Allow** to authorize the application
-
-5. You'll be redirected to a page showing your refresh token in a large, copyable box
-
-6. Click the **📋 Copy Token** button or manually copy the token
-
-7. Add it to `backend/.env`:
-   ```env
-   GOOGLE_REFRESH_TOKEN=your_refresh_token_here
-   ```
-
-8. Restart the backend server
-
-### Troubleshooting: No Refresh Token Shown
-
-If you don't see a refresh token:
-
-1. **Check the redirect URI:** Make sure `http://localhost:3001/auth/callback` is added to authorized redirect URIs in Google Cloud Console
-2. **Revoke and retry:** Go to [Google Account Permissions](https://myaccount.google.com/permissions) and revoke access, then try again
-3. **Check console logs:** The backend server will log whether a refresh token was received
-4. **Use the JSON file method:** You can also use your JSON credentials file by setting `GOOGLE_CREDENTIALS_PATH` in `.env`
+- If the consent window shows “app not verified,” confirm you are signing in with a user listed under **Test users**.
+- If you see `Cannot GET /auth/callback`, double-check both `.env` and the Google Console redirect list use `http://localhost:3001/auth/google/callback`.
+- To reset the connection, delete `backend/google-tokens.json` and repeat the steps above.
 
 ## Step 7: Run the Application
 

@@ -11,6 +11,7 @@ let regionSelectionMode = false;
 let previousChatBounds = null;
 let isMaximizingWindow = false;
 let isRestoringWindow = false;
+let googleAuthWindow = null;
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 
 function createOverlayWindow() {
@@ -131,6 +132,10 @@ function createChatWindow() {
     if (regionSelectorWindow) {
       regionSelectorWindow.close();
       regionSelectorWindow = null;
+    }
+    if (googleAuthWindow) {
+      googleAuthWindow.close();
+      googleAuthWindow = null;
     }
     regionSelectionMode = false;
   });
@@ -415,6 +420,48 @@ ipcMain.handle('capture-active-window', async () => {
     chatWindow.webContents.send('screenshot-captured', screenshot);
   }
   return screenshot;
+});
+
+ipcMain.handle('start-google-auth', async () => {
+  if (googleAuthWindow && !googleAuthWindow.isDestroyed()) {
+    googleAuthWindow.focus();
+    return true;
+  }
+
+  const authUrl = `${API_URL}/auth/google`;
+
+  googleAuthWindow = new BrowserWindow({
+    width: 520,
+    height: 700,
+    resizable: true,
+    parent: chatWindow || undefined,
+    modal: false,
+    title: 'Connect Google Account',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  googleAuthWindow.removeMenu?.();
+
+  try {
+    await googleAuthWindow.loadURL(authUrl);
+  } catch (error) {
+    console.error('Failed to load Google auth URL:', error);
+    googleAuthWindow.close();
+    googleAuthWindow = null;
+    return false;
+  }
+
+  googleAuthWindow.on('closed', () => {
+    googleAuthWindow = null;
+    if (chatWindow) {
+      chatWindow.webContents.send('google-auth-closed');
+    }
+  });
+
+  return true;
 });
 
 ipcMain.handle('start-region-selection', () => {
