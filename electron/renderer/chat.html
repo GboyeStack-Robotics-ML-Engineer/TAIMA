@@ -27,17 +27,6 @@
                 <span>TAIMA</span>
             </div>
             <div class="header-actions">
-                <button class="control-btn google-connect" id="googleConnectBtn" title="Connect Google Account">
-                    <span class="control-icon google-icon" aria-hidden="true">
-                        <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" focusable="false">
-                            <path d="M19.6 10.23c0-.68-.06-1.33-.18-1.96H10v3.71h5.38a4.6 4.6 0 0 1-2 3.03v2.5h3.24c1.9-1.75 2.98-4.33 2.98-7.28Z" fill="#4285F4"/>
-                            <path d="M10 20c2.7 0 4.96-.9 6.61-2.44l-3.24-2.5c-.9.6-2.05.95-3.37.95-2.6 0-4.81-1.75-5.59-4.13H1.07v2.6A10 10 0 0 0 10 20Z" fill="#34A853"/>
-                            <path d="M4.41 11.88c-.2-.6-.31-1.25-.31-1.88s.11-1.29.31-1.88V5.52H1.07A10 10 0 0 0 0 10c0 1.6.38 3.12 1.07 4.48l3.34-2.6Z" fill="#FBBC05"/>
-                            <path d="M10 3.96c1.47 0 2.78.5 3.81 1.48l2.86-2.86C14.96 1.02 12.7 0 10 0 6.09 0 2.69 2.23 1.07 5.52l3.34 2.6C4.98 5.75 7.19 3.96 10 3.96Z" fill="#EA4335"/>
-                        </svg>
-                    </span>
-                    <span class="control-label">Connect Google</span>
-                </button>
                 <button class="control-btn screen-select" id="screenSelectBtn" title="Select Screen Area">
                     <span class="control-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" focusable="false">
@@ -128,7 +117,6 @@
                 <div class="suggestion-header">
                     <div class="suggestion-title-group">
                         <span class="suggestion-title">Suggested next steps</span>
-                        <span class="service-status-pill disconnected" id="googleStatusPill">Google disconnected</span>
                     </div>
                     <div class="suggestion-header-actions">
                         <button id="refreshSuggestionsBtn" class="suggestion-refresh-btn" title="Refresh suggestions">
@@ -146,6 +134,48 @@
                 <button id="quickActionBtn" class="input-icon-btn" title="Quick Actions">
                     <span class="icon">+</span>
                 </button>
+                <div id="quickActionMenu" class="quick-action-menu hidden" role="menu">
+                    <button type="button" class="quick-action-item" id="googleQuickAction" data-action="google-connect" role="menuitem">
+                        <span class="quick-action-icon" aria-hidden="true">
+                            <span class="quick-action-icon-ring"></span>
+                            <span class="quick-action-icon-core"></span>
+                            <span class="quick-action-icon-glyph google">
+                                <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                                    <path d="M19.6 10.23c0-.68-.06-1.33-.18-1.96H10v3.71h5.38a4.6 4.6 0 0 1-2 3.03v2.5h3.24c1.9-1.75 2.98-4.33 2.98-7.28Z" fill="#4285F4"/>
+                                    <path d="M10 20c2.7 0 4.96-.9 6.61-2.44l-3.24-2.5c-.9.6-2.05.95-3.37.95-2.6 0-4.81-1.75-5.59-4.13H1.07v2.6A10 10 0 0 0 10 20Z" fill="#34A853"/>
+                                    <path d="M4.41 11.88c-.2-.6-.31-1.25-.31-1.88s.11-1.29.31-1.88V5.52H1.07A10 10 0 0 0 0 10c0 1.6.38 3.12 1.07 4.48l3.34-2.6Z" fill="#FBBC05"/>
+                                    <path d="M10 3.96c1.47 0 2.78.5 3.81 1.48l2.86-2.86C14.96 1.02 12.7 0 10 0 6.09 0 2.69 2.23 1.07 5.52l3.34 2.6C4.98 5.75 7.19 3.96 10 3.96Z" fill="#EA4335"/>
+                                </svg>
+                            </span>
+                        </span>
+                        <div class="quick-action-text">
+                            <span class="quick-action-title">Google Workspace</span>
+                            <span class="quick-action-description" id="googleQuickActionDescription">Calendar &amp; Gmail</span>
+                        </div>
+                        <span class="quick-action-status" id="googleQuickActionStatus">Connect</span>
+                    </button>
+                    <div class="quick-action-divider" role="separator"></div>
+                    <button type="button" class="quick-action-item" id="quickActionCapture" data-action="capture-screenshot" role="menuitem">
+                        <span class="quick-action-icon camera" aria-hidden="true">
+                            <span class="quick-action-icon-ring"></span>
+                            <span class="quick-action-icon-glyph">📸</span>
+                        </span>
+                        <div class="quick-action-text">
+                            <span class="quick-action-title">Capture Focus</span>
+                            <span class="quick-action-description">Refresh the current screenshot</span>
+                        </div>
+                    </button>
+                    <button type="button" class="quick-action-item" id="quickActionSuggestions" data-action="refresh-suggestions" role="menuitem">
+                        <span class="quick-action-icon sparkles" aria-hidden="true">
+                            <span class="quick-action-icon-ring"></span>
+                            <span class="quick-action-icon-glyph">✨</span>
+                        </span>
+                        <div class="quick-action-text">
+                            <span class="quick-action-title">Refresh Ideas</span>
+                            <span class="quick-action-description">Ask TAIMA for new suggestions</span>
+                        </div>
+                    </button>
+                </div>
                 <textarea 
                     id="messageInput" 
                     placeholder="Write your prompt here.."

@@ -38,9 +38,13 @@ const suggestionBar = document.getElementById('suggestionBar');
 const suggestionChips = document.getElementById('suggestionChips');
 const refreshSuggestionsBtn = document.getElementById('refreshSuggestionsBtn');
 const toggleSuggestionsBtn = document.getElementById('toggleSuggestionsBtn');
-const googleConnectBtn = document.getElementById('googleConnectBtn');
-const googleConnectLabel = googleConnectBtn ? googleConnectBtn.querySelector('.control-label') : null;
-const googleStatusPill = document.getElementById('googleStatusPill');
+const quickActionBtn = document.getElementById('quickActionBtn');
+const quickActionMenu = document.getElementById('quickActionMenu');
+const googleQuickAction = document.getElementById('googleQuickAction');
+const googleQuickActionStatus = document.getElementById('googleQuickActionStatus');
+const googleQuickActionDescription = document.getElementById('googleQuickActionDescription');
+const quickActionCapture = document.getElementById('quickActionCapture');
+const quickActionSuggestions = document.getElementById('quickActionSuggestions');
 
 
 // State
@@ -84,6 +88,9 @@ let googleConnectBtnLoading = false;
 let googleAuthAttemptActive = false;
 let googleStatusFetchPromise = null;
 let googleQuickPollDeadline = 0;
+let quickActionMenuOpen = false;
+let quickActionDocumentClickHandler = null;
+let quickActionDocumentKeyHandler = null;
 
 const focusLabels = {
     'entire-screen': 'entire screen',
@@ -115,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupWindowResizing();
     initializeWindowStateSync();
     initializeApiConfig();
+    setupQuickActions();
     setupSuggestionControls();
     initializeGoogleIntegration();
     initializeScreenshotState();
@@ -179,6 +187,108 @@ function setupInputBehavior() {
             statusMessage.textContent = 'Voice mode active - Start speaking naturally';
         }, 2000);
     });
+}
+
+function setupQuickActions() {
+    if (!quickActionBtn || !quickActionMenu) {
+        return;
+    }
+
+    quickActionBtn.setAttribute('aria-haspopup', 'true');
+    quickActionBtn.setAttribute('aria-expanded', 'false');
+    quickActionMenu.setAttribute('aria-hidden', 'true');
+
+    quickActionBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleQuickActionMenu();
+    });
+
+    quickActionMenu.addEventListener('click', (event) => {
+        event.stopPropagation();
+    });
+
+    quickActionDocumentClickHandler = (event) => {
+        if (!quickActionMenuOpen) {
+            return;
+        }
+
+        if (!quickActionMenu.contains(event.target) && event.target !== quickActionBtn) {
+            closeQuickActionMenu();
+        }
+    };
+
+    quickActionDocumentKeyHandler = (event) => {
+        if (event.key === 'Escape' && quickActionMenuOpen) {
+            closeQuickActionMenu();
+        }
+    };
+
+    document.addEventListener('click', quickActionDocumentClickHandler);
+    document.addEventListener('keydown', quickActionDocumentKeyHandler);
+
+    if (googleQuickAction) {
+        googleQuickAction.addEventListener('click', async (event) => {
+            event.preventDefault();
+            if (googleQuickAction.disabled) {
+                return;
+            }
+            closeQuickActionMenu();
+            await handleGoogleConnectClick();
+        });
+    }
+
+    if (quickActionCapture) {
+        quickActionCapture.addEventListener('click', async () => {
+            closeQuickActionMenu();
+            await captureFocusScreenshot(currentFocusMode, { announce: true });
+        });
+    }
+
+    if (quickActionSuggestions) {
+        quickActionSuggestions.addEventListener('click', () => {
+            closeQuickActionMenu();
+            refreshSuggestions('manual', { force: true });
+        });
+    }
+}
+
+function toggleQuickActionMenu(forceState) {
+    const shouldOpen = typeof forceState === 'boolean' ? forceState : !quickActionMenuOpen;
+    if (shouldOpen) {
+        openQuickActionMenu();
+    } else {
+        closeQuickActionMenu();
+    }
+}
+
+function openQuickActionMenu() {
+    if (!quickActionMenu || !quickActionBtn || quickActionMenuOpen) {
+        return;
+    }
+
+    quickActionMenu.classList.remove('hidden');
+    quickActionMenuOpen = true;
+    quickActionBtn.classList.add('active');
+    quickActionBtn.setAttribute('aria-expanded', 'true');
+    quickActionMenu.setAttribute('aria-hidden', 'false');
+
+    const firstAction = quickActionMenu.querySelector('.quick-action-item');
+    if (firstAction) {
+        firstAction.focus({ preventScroll: true });
+    }
+}
+
+function closeQuickActionMenu() {
+    if (!quickActionMenu || !quickActionBtn || !quickActionMenuOpen) {
+        return;
+    }
+
+    quickActionMenu.classList.add('hidden');
+    quickActionMenuOpen = false;
+    quickActionBtn.classList.remove('active');
+    quickActionBtn.setAttribute('aria-expanded', 'false');
+    quickActionMenu.setAttribute('aria-hidden', 'true');
+    quickActionBtn.focus({ preventScroll: true });
 }
 
 // Window Controls
@@ -616,13 +726,11 @@ function clearAudioSimulationTimeouts() {
 
 // Google account integration
 function initializeGoogleIntegration() {
-    if (!googleConnectBtn || !googleStatusPill) {
+    if (!googleQuickAction) {
         return;
     }
 
     updateGoogleStatusUI();
-
-    googleConnectBtn.addEventListener('click', handleGoogleConnectClick);
 
     if (ipcRenderer) {
         ipcRenderer.on('google-auth-closed', handleGoogleAuthClosed);
@@ -638,7 +746,7 @@ function initializeGoogleIntegration() {
 }
 
 async function refreshGoogleStatus(options = {}) {
-    if (!googleConnectBtn || !googleStatusPill) {
+    if (!googleQuickAction) {
         return googleStatus;
     }
 
@@ -686,7 +794,7 @@ function applyGoogleStatusUpdate(raw, options = {}) {
 
     if (googleStatus.connected) {
         googleAuthAttemptActive = false;
-        setGoogleConnectButtonLoading(false);
+        setGoogleQuickActionLoading(false);
     }
 
     updateGoogleStatusUI();
@@ -699,53 +807,48 @@ function applyGoogleStatusUpdate(raw, options = {}) {
 }
 
 function updateGoogleStatusUI() {
-    if (!googleStatusPill) {
+    if (!googleQuickAction) {
         return;
     }
 
     const connected = Boolean(googleStatus.connected);
     const profileEmail = getGoogleProfileEmail();
-    const pillLabel = connected
-        ? (profileEmail ? `Google connected - ${profileEmail}` : 'Google connected')
-        : 'Google disconnected';
+    const description = connected
+        ? (profileEmail || 'Calendar & Gmail ready')
+        : 'Calendar & Gmail';
 
-    googleStatusPill.textContent = pillLabel;
-    googleStatusPill.classList.toggle('connected', connected);
-    googleStatusPill.classList.toggle('disconnected', !connected);
+    googleQuickAction.classList.toggle('connected', connected);
+    googleQuickAction.setAttribute('data-state', connected ? 'connected' : 'disconnected');
 
-    if (googleConnectBtn) {
-        googleConnectBtn.classList.toggle('connected', connected);
-        if (!googleConnectBtnLoading && googleConnectLabel) {
-            googleConnectLabel.textContent = connected ? 'Manage Google' : 'Connect Google';
-        }
-        if (!googleConnectBtnLoading) {
-            googleConnectBtn.title = connected
-                ? 'Manage Google account connection'
-                : 'Connect Google account';
-        }
+    if (!googleConnectBtnLoading && googleQuickActionStatus) {
+        googleQuickActionStatus.textContent = connected ? 'Connected' : 'Connect';
     }
+
+    if (googleQuickActionDescription) {
+        googleQuickActionDescription.textContent = description;
+    }
+
+    googleQuickAction.setAttribute(
+        'title',
+        connected ? 'Disconnect Google account' : 'Connect Google account'
+    );
 }
 
-function setGoogleConnectButtonLoading(loading, temporaryLabel) {
-    if (!googleConnectBtn) {
+function setGoogleQuickActionLoading(loading, temporaryLabel) {
+    if (!googleQuickAction) {
         return;
     }
 
     googleConnectBtnLoading = Boolean(loading);
-    googleConnectBtn.disabled = googleConnectBtnLoading;
+    googleQuickAction.disabled = googleConnectBtnLoading;
+    googleQuickAction.classList.toggle('loading', googleConnectBtnLoading);
 
-    if (googleConnectBtnLoading) {
-        if (googleConnectLabel && temporaryLabel) {
-            googleConnectLabel.textContent = temporaryLabel;
+    if (googleQuickActionStatus) {
+        if (googleConnectBtnLoading) {
+            googleQuickActionStatus.textContent = temporaryLabel || 'Working...';
+        } else {
+            googleQuickActionStatus.textContent = googleStatus.connected ? 'Connected' : 'Connect';
         }
-        googleConnectBtn.title = 'Complete the Google sign-in flow';
-    } else {
-        if (googleConnectLabel) {
-            googleConnectLabel.textContent = googleStatus.connected ? 'Manage Google' : 'Connect Google';
-        }
-        googleConnectBtn.title = googleStatus.connected
-            ? 'Manage Google account connection'
-            : 'Connect Google account';
     }
 }
 
@@ -760,6 +863,7 @@ function getGoogleProfileEmail() {
 }
 
 async function handleGoogleConnectClick() {
+    closeQuickActionMenu();
     if (googleConnectBtnLoading) {
         return;
     }
@@ -785,12 +889,12 @@ async function startGoogleAuthFlow() {
         return false;
     }
 
-    setGoogleConnectButtonLoading(true, 'Opening...');
+    setGoogleQuickActionLoading(true, 'Opening...');
 
     try {
         const opened = await ipcRenderer.invoke('start-google-auth');
         if (opened === false) {
-            setGoogleConnectButtonLoading(false);
+            setGoogleQuickActionLoading(false);
             addMessage('assistant', '❌ Unable to open Google sign-in window.');
             return false;
         }
@@ -800,14 +904,14 @@ async function startGoogleAuthFlow() {
         return true;
     } catch (error) {
         console.error('Error starting Google auth flow:', error);
-        setGoogleConnectButtonLoading(false);
+        setGoogleQuickActionLoading(false);
         addMessage('assistant', '❌ Failed to start Google authentication.');
         return false;
     }
 }
 
 async function disconnectGoogleAccount() {
-    setGoogleConnectButtonLoading(true, 'Disconnecting...');
+    setGoogleQuickActionLoading(true, 'Disconnecting...');
 
     try {
         const baseUrl = await initializeApiConfig();
@@ -824,7 +928,7 @@ async function disconnectGoogleAccount() {
         console.error('Error disconnecting Google account:', error);
         addMessage('assistant', '❌ Failed to disconnect Google account. Please try again.');
     } finally {
-        setGoogleConnectButtonLoading(false);
+        setGoogleQuickActionLoading(false);
     }
 }
 
@@ -881,7 +985,7 @@ function startGoogleStatusQuickPoll(durationMs = 20000, intervalMs = 2000) {
 }
 
 function handleGoogleAuthClosed() {
-    setGoogleConnectButtonLoading(false);
+    setGoogleQuickActionLoading(false);
 
     if (googleAuthAttemptActive) {
         googleAuthAttemptActive = false;
@@ -1359,6 +1463,14 @@ window.addEventListener('beforeunload', () => {
         ipcRenderer.removeAllListeners('screenshot-captured');
         ipcRenderer.removeAllListeners('error');
         ipcRenderer.removeListener('google-auth-closed', handleGoogleAuthClosed);
+    }
+    if (quickActionDocumentClickHandler) {
+        document.removeEventListener('click', quickActionDocumentClickHandler);
+        quickActionDocumentClickHandler = null;
+    }
+    if (quickActionDocumentKeyHandler) {
+        document.removeEventListener('keydown', quickActionDocumentKeyHandler);
+        quickActionDocumentKeyHandler = null;
     }
 });
 

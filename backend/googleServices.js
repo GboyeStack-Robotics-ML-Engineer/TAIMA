@@ -107,6 +107,16 @@ function normalizeAttendees(list) {
   return attendees.length ? attendees : undefined;
 }
 
+function coerceArray(value) {
+  if (!value) return undefined;
+  return Array.isArray(value) ? value.filter(Boolean) : [value];
+}
+
+function safeQuoteForQuery(text) {
+  if (!text) return undefined;
+  return `"${String(text).replace(/"/g, '')}"`;
+}
+
 async function getCalendarClient() {
   const auth = await googleAuth.getAuthorizedClient();
   return google.calendar({ version: 'v3', auth });
@@ -235,9 +245,21 @@ function parseHeaders(headers = []) {
   };
 }
 
+function resolveEmailBody(payload = {}) {
+  return (
+    payload.body ??
+    payload.html ??
+    payload.text ??
+    payload.content ??
+    payload.message ??
+    payload.snippet
+  );
+}
+
 async function sendEmail(payload = {}) {
   const gmail = await getGmailClient();
-  const raw = buildRawEmail(payload);
+  const body = resolveEmailBody(payload);
+  const raw = buildRawEmail({ ...payload, body });
 
   const response = await gmail.users.messages.send({
     userId: 'me',
@@ -278,10 +300,14 @@ function buildRawEmail({ to, subject, body, cc, bcc, from }) {
 
 async function replyToEmail(payload = {}) {
   const gmail = await getGmailClient();
-  const { messageId, threadId, body, subject, to, cc, bcc } = payload;
-  if (!messageId || !threadId || !body) {
-    throw new Error('Reply requires messageId, threadId, and body.');
+  const { subject, to, cc, bcc } = payload;
+
+  const body = resolveEmailBody(payload);
+  if (!body) {
+    throw new Error('Reply requires body content.');
   }
+
+  const { messageId, threadId } = await resolveReplyContext(gmail, payload);
 
   const headers = [];
   if (subject) {
@@ -312,6 +338,66 @@ async function replyToEmail(payload = {}) {
   });
 
   return response.data;
+}
+
+async function resolveReplyContext(gmail, payload = {}) {
+  let { messageId, threadId } = payload;
+
+  if (messageId && threadId) {
+    return { messageId, threadId };
+  }
+
+  if (threadId && !messageId) {
+    const thread = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'minimal'
+    });
+
+    const latest = thread.data?.messages?.slice(-1)[0];
+    if (latest?.id) {
+      return { messageId: latest.id, threadId: thread.data.id };
+    }
+  }
+
+  const labelIds = coerceArray(payload.labelIds);
+  const queryParts = [];
+
+  if (payload.query) queryParts.push(payload.query);
+  if (payload.subject) queryParts.push(`subject:${safeQuoteForQuery(payload.subject)}`);
+  if (payload.from) queryParts.push(`from:${payload.from}`);
+  if (payload.to) queryParts.push(`to:${payload.to}`);
+  if (payload.after) queryParts.push(`after:${payload.after}`);
+  if (payload.before) queryParts.push(`before:${payload.before}`);
+  if (payload.threadHint) queryParts.push(payload.threadHint);
+
+  const query = queryParts.filter(Boolean).join(' ').trim() || undefined;
+
+  const listResponse = await gmail.users.messages.list({
+    userId: 'me',
+    q: query,
+    maxResults: 1,
+    labelIds
+  });
+
+  const candidate = listResponse.data.messages && listResponse.data.messages[0];
+
+  if (candidate) {
+    return { messageId: candidate.id, threadId: candidate.threadId };
+  }
+
+  const newest = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 1,
+    labelIds
+  });
+
+  const recent = newest.data.messages && newest.data.messages[0];
+  if (!recent) {
+    throw new Error('Unable to locate an email thread to reply to. Provide more context.');
+  }
+
+  return { messageId: recent.id, threadId: recent.threadId };
 }
 
 async function getGmailProfile() {

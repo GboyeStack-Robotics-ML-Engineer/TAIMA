@@ -343,8 +343,9 @@ app.post('/api/chat', async (req, res) => {
 
     console.log('Gemini response received');
 
-    const { cleanedText, actions } = extractActions(rawText);
-    const actionOutputs = await executeAssistantActions(actions);
+  const { cleanedText, actions } = extractActions(rawText);
+  const assistantMessage = (cleanedText || '').trim();
+  const actionOutputs = await executeAssistantActions(actions, { assistantMessage });
 
     const finalResponse = [cleanedText.trim(), actionOutputs.join('\n')]
       .filter(Boolean)
@@ -423,7 +424,7 @@ function extractActions(rawText) {
   return { cleanedText, actions };
 }
 
-async function executeAssistantActions(actions = []) {
+async function executeAssistantActions(actions = [], context = {}) {
   if (!Array.isArray(actions) || actions.length === 0) {
     return [];
   }
@@ -436,7 +437,7 @@ async function executeAssistantActions(actions = []) {
     }
 
     try {
-      const summary = await routeAssistantAction(action.type, action.payload || {});
+  const summary = await routeAssistantAction(action.type, action.payload || {}, context);
       if (summary) {
         outputs.push(`✅ ${summary}`);
       }
@@ -453,7 +454,7 @@ async function executeAssistantActions(actions = []) {
   return outputs;
 }
 
-async function routeAssistantAction(type, payload = {}) {
+async function routeAssistantAction(type, payload = {}, context = {}) {
   switch (type) {
     case 'calendar.create': {
       const event = await googleServices.createCalendarEvent(payload, { calendarId: payload.calendarId });
@@ -484,12 +485,14 @@ async function routeAssistantAction(type, payload = {}) {
       return `Upcoming events:\n${preview.join('\n')}`;
     }
     case 'gmail.send': {
-      await googleServices.sendEmail(payload);
-      const recipients = Array.isArray(payload.to) ? payload.to.join(', ') : payload.to;
-      return `Sent email${recipients ? ` to ${recipients}` : ''}${payload.subject ? ` with subject “${payload.subject}”` : ''}.`;
+      const resolvedPayload = ensureSendEmailPayload(payload, context);
+      await googleServices.sendEmail(resolvedPayload);
+      const recipients = Array.isArray(resolvedPayload.to) ? resolvedPayload.to.join(', ') : resolvedPayload.to;
+      return `Sent email${recipients ? ` to ${recipients}` : ''}${resolvedPayload.subject ? ` with subject “${resolvedPayload.subject}”` : ''}.`;
     }
     case 'gmail.reply': {
-      await googleServices.replyToEmail(payload);
+      const resolvedPayload = ensureReplyEmailPayload(payload, context);
+      await googleServices.replyToEmail(resolvedPayload);
       return 'Sent reply email as requested.';
     }
     case 'gmail.list': {
@@ -507,6 +510,78 @@ async function routeAssistantAction(type, payload = {}) {
     default:
       throw new Error(`Unsupported action type: ${type}`);
   }
+}
+
+function ensureSendEmailPayload(payload = {}, context = {}) {
+  const resolved = { ...payload };
+
+  resolved.to = resolved.to || resolved.recipient;
+
+  if (!resolved.to) {
+    throw new Error('gmail.send requires at least one recipient (to).');
+  }
+
+  if (!resolved.subject) {
+    resolved.subject = deriveSubjectFromMessage(context.assistantMessage);
+  }
+
+  resolved.body = normalizeEmailBody(
+    resolved.body ?? resolved.html ?? resolved.text ?? context.assistantMessage
+  );
+
+  if (!resolved.body) {
+    throw new Error('Unable to determine email body content.');
+  }
+
+  return resolved;
+}
+
+function ensureReplyEmailPayload(payload = {}, context = {}) {
+  const resolved = { ...payload };
+
+  resolved.to = resolved.to || resolved.recipient;
+  resolved.body = normalizeEmailBody(
+    resolved.body ?? resolved.html ?? resolved.text ?? context.assistantMessage
+  );
+
+  if (!resolved.body) {
+    throw new Error('Unable to determine reply body content.');
+  }
+
+  return resolved;
+}
+
+function normalizeEmailBody(body) {
+  if (!body) {
+    return body;
+  }
+
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/<[a-z][\s\S]*>/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed
+    .split('\n')
+    .map((line) => line.trim())
+    .join('<br>');
+}
+
+function deriveSubjectFromMessage(message) {
+  if (!message) {
+    return 'No subject';
+  }
+
+  const firstLine = message.split('\n').map((line) => line.trim()).find(Boolean);
+  if (!firstLine) {
+    return 'No subject';
+  }
+
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
 function formatEventRange(event) {
