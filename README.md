@@ -50,7 +50,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ```env
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
+GOOGLE_REDIRECT_URI=http://localhost:3001/auth/callback
 ```
 
 6. In the Google Cloud Console, open the OAuth consent screen and add your Google account under **Test users** (required while the app is in testing mode).
